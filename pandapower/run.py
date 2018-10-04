@@ -10,6 +10,7 @@ from pandapower.auxiliary import _add_pf_options, _add_ppc_options, _add_opf_opt
     _check_if_numba_is_installed, _check_bus_index_and_print_warning_if_high, \
     _check_gen_index_and_print_warning_if_high
 from pandapower.optimal_powerflow import _optimal_powerflow
+from pandapower.optimal_powerflow import _algebraic_ac_optimal_powerflow
 from pandapower.opf.validate_opf_input import _check_necessary_opf_parameters
 from pandapower.powerflow import _powerflow
 import inspect
@@ -504,3 +505,79 @@ def rundcopp(net, verbose=False, check_connectivity=True, suppress_warnings=True
     _check_bus_index_and_print_warning_if_high(net)
     _check_gen_index_and_print_warning_if_high(net)
     _optimal_powerflow(net, verbose, suppress_warnings, **kwargs)
+
+
+def runaacopp(net, verbose=False, calculate_voltage_angles=False,
+              check_connectivity=False, suppress_warnings=True, r_switch=0.0, delta=1e-10,
+              init="flat", numba=True, trafo3w_losses="hv",
+              # opt_level='simlevel',
+              from_ppci=True,
+              model_file='aacopf_simlevel', defintions_file="set_parameter_variable",
+              obj_func={'SL': 'obj_minimize_p_cost'}, solver='ipopt', solver_options={}, **kwargs):
+    """
+    Runs the pyomo pandapower Optimal Power Flow.
+
+    INPUT:
+        **net** - The pandapower format network
+
+    OPTIONAL:
+        **verbose** (bool, False) - If True, some basic information is printed
+
+        # **opt_level** (str, 'simlevel') - sim- or bilevel optimisation
+        #
+        #     Currently only the simlevel optimisation is implemented.
+
+        **from_ppci** (bool, True) - create optimisation problem from ppci
+
+            Allows for the reutlisation of input data loaded in a previous optimisation run.
+
+        **model_file** (str, 'aacopf_simlevel') - optimisation model to use
+
+            The models folder contains various optimisation model formulations, modelf_file
+            determines which to use.
+
+        **defintions_file** (str, 'set_parameter_variable') - sets, parameters and variable to use
+
+            Different optimisation models may need different definitions of Sets, parameters and
+            Variables definitions_file sets which defintions file is used.
+
+        **obj_func** (dict, {'SL': 'obj_minimize_p_cost'}) - choose objective funciton
+
+            A simlevel optimisation needs an objective function a bilevel optimisation need
+            objective functions for the upper and the lower level. Which objective function to use
+            is specified here.
+
+        **solver** (str, 'ipopt') - solver to use
+
+        **solver_options** (dict, {}) - options to be passed to the solver
+
+    """
+    aacopop = {
+        # 'opt_level': opt_level,
+        'model_file': model_file, 'definitions_file': defintions_file,
+        'from_ppci': from_ppci, 'obj_func': obj_func, 'solveroptions': {
+            'solver': solver, 'solver-options': solver_options}
+        }
+
+    _check_necessary_opf_parameters(net, logger)
+    if numba:
+        numba = _check_if_numba_is_installed(numba)
+    mode = "opf"
+    ac = True
+    copy_constraints_to_ppc = True
+    trafo_model = "t"
+    trafo_loading = 'current'
+    enforce_q_lims = True
+    recycle = dict(_is_elements=False, ppc=False, Ybus=False)
+
+    net._options = {}
+    _add_ppc_options(net, calculate_voltage_angles=calculate_voltage_angles,
+                     trafo_model=trafo_model, check_connectivity=check_connectivity,
+                     mode=mode, copy_constraints_to_ppc=copy_constraints_to_ppc,
+                     r_switch=r_switch, init_vm_pu=init, init_va_degree=init,
+                     enforce_q_lims=enforce_q_lims, recycle=recycle,
+                     voltage_depend_loads=False, delta=delta, trafo3w_losses=trafo3w_losses)
+    _add_opf_options(net, trafo_loading=trafo_loading, ac=ac, init=init, numba=numba)
+    # _check_bus_index_and_print_warning_if_high(net)
+    # _check_gen_index_and_print_warning_if_high(net)
+    _algebraic_ac_optimal_powerflow(net, verbose, suppress_warnings, aacopop, **kwargs)

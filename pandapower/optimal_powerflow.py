@@ -13,6 +13,7 @@ from scipy.sparse import csr_matrix as sparse
 from pandapower.auxiliary import ppException, _clean_up
 from pandapower.idx_bus import VM
 from pandapower.opf.opf import opf
+from pandapower.opf.aacopf import aacopf
 from pandapower.pd2ppc import _pd2ppc
 from pandapower.pf.run_newton_raphson_pf import _run_newton_raphson_pf
 from pandapower.powerflow import _add_auxiliary_elements
@@ -97,3 +98,45 @@ def _run_pf_before_opf(net, ppci):
     net._options["max_iteration"] = 10
     net._options["algorithm"] = "nr"
     return _run_newton_raphson_pf(ppci, net["_options"])
+
+
+def _algebraic_ac_optimal_powerflow(net, verbose, suppress_warnings, aacopop, **kwargs):
+    ac = net["_options"]["ac"]
+    init = net["_options"]["init"]
+
+    ppopt = ppoption(VERBOSE=verbose, OPF_FLOW_LIM=2, PF_DC=not ac, INIT=init, **kwargs)
+    net["OPF_converged"] = False
+    net["converged"] = False
+    _add_auxiliary_elements(net)
+    reset_results(net)
+
+    ppc, ppci = _pd2ppc(net)
+    if not ac:
+        ppci["bus"][:, VM] = 1.0
+    net["_ppc_opf"] = ppc
+    if len(net.dcline) > 0:
+        ppci = add_userfcn(ppci, 'formulation', _add_dcline_constraints, args=net)
+
+    if init == "pf":
+        ppci = _run_pf_before_opf(net, ppci)
+
+    # thats where aacopf_load.py ends
+    if suppress_warnings:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = aacopf(aacopop, ppc, ppci, ppopt)
+    else:
+        result = aacopf(aacopop, ppc, ppci, ppopt)
+    net["_ppc_opf"] = result
+
+    if not result["success"]:
+        raise OPFNotConverged("Algebraic AC Optimal Power Flow did not converge!")
+
+    # ppci doesn't contain out of service elements, but ppc does -> copy results accordingly
+    mode = net["_options"]["mode"]
+    result = _copy_results_ppci_to_ppc(result, ppc, mode=mode)
+
+    net["_ppc_opf"] = result
+    net["OPF_converged"] = True
+    _extract_results_opf(net, result)
+    _clean_up(net)
